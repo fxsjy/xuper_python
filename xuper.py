@@ -117,7 +117,7 @@ class XuperSDK(object):
 		return requests.post(self.url + "/v1/post_tx", data = json.dumps(payload)).content
 
 
-	def transfer(self, bcname, to_address, amount):
+	def transfer(self, bcname, to_address, amount, desc=''):
 		payload = {
 			'bcname':bcname,
 			'address': self.address,
@@ -152,7 +152,7 @@ class XuperSDK(object):
 				'to_addr': base64.b64encode(self.address.encode()).decode()
 			}
 		)
-		tx['desc'] = base64.b64encode(b'pysdk').decode()
+		tx['desc'] = base64.b64encode(desc.encode()).decode()
 		tx['nonce'] = str(int(time.time()*1e6)) 
 		tx['timestamp'] = int(time.time()*1e6)
 		tx['initiator'] = self.address
@@ -176,5 +176,5 @@ if __name__ == "__main__":
 	pysdk = XuperSDK("http://localhost:8098")
 	pysdk.readkeys("./data/keys")
 
-	pysdk.transfer("xuper", "bob", 88888)
+	pysdk.transfer("xuper", "bob", 88888, desc="hello world")
 
