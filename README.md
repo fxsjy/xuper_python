@@ -1,4 +1,8 @@
 # xuper_python
+## depends
+        Python Version:  only python3 
+        pip install ecdsa
+        pip install requests
 ## usage
         import xuper
         pysdk = xuper.XuperSDK("http://localhost:8098")
