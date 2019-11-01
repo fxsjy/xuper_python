@@ -3,6 +3,9 @@
         Python Version:  only python3 
         pip install ecdsa
         pip install requests
+## start server
+        nohup ./xchain &
+        nohup xchain-httpgw &
 ## usage
         import xuper
         pysdk = xuper.XuperSDK("http://localhost:8098")
