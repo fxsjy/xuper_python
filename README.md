@@ -5,7 +5,7 @@
         pip install requests
 ## start server
         nohup ./xchain &
-        nohup xchain-httpgw &
+        nohup ./xchain-httpgw &
 ## usage
         import xuper
         pysdk = xuper.XuperSDK("http://localhost:8098")
