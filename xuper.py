@@ -21,6 +21,10 @@ TxTemplate = '''
     "nonce": "",
     "timestamp": "",
     "version": 1,
+    "tx_inputs_ext":[
+    ],
+    "tx_outputs_ext":[
+    ],
     "initiator": "",
     "auth_require": [
     ],
@@ -31,16 +35,24 @@ TxTemplate = '''
 }
 '''
 
+ResTypeEnum = {
+	"CPU":0,
+  	"MEMORY":1,
+  	"DISK":2,
+  	"XFEE":3
+}
+
 def double_sha256(data):
 	s1 = hashlib.sha256(data).digest()
 	return hashlib.sha256(s1)
 
 def go_style_dumps(data):
-	return json.dumps(data,separators=(',',':'),sort_keys=True)
+	return json.dumps(data,separators=(',',':'),sort_keys=False)
 	
 class XuperSDK(object):
-	def __init__(self, url):
+	def __init__(self, url, bcname):
 		self.url = url
+		self.bcname = bcname
 
 	def __encodeTx(self, tx, include_sign = False):
 		s = ""
@@ -57,16 +69,37 @@ class XuperSDK(object):
 			s += "\n"
 		s += go_style_dumps(tx['tx_outputs'])
 		s += "\n"
-		s += go_style_dumps(tx['desc'])
-		s += "\n"
+		if len(tx['desc']) > 0:
+			s += go_style_dumps(tx['desc'])
+			s += "\n"
 		s += go_style_dumps(tx['nonce'])
 		s += "\n"
 		s += go_style_dumps(tx['timestamp'])
 		s += "\n"
 		s += go_style_dumps(tx['version'])
 		s += "\n"
-		s += "null"  # contract request
-		s += "\n"
+		for tx_input_ext in tx['tx_inputs_ext']:
+			s += go_style_dumps(tx_input_ext['bucket'])
+			s += "\n"
+			s += go_style_dumps(tx_input_ext['key'])
+			s += "\n"
+			s += go_style_dumps(tx_input_ext['ref_txid'])
+			s += "\n"
+			s += go_style_dumps(tx_input_ext.get('ref_offset',0))
+			s += "\n"
+		for tx_output_ext in tx['tx_outputs_ext']:
+			s += go_style_dumps(tx_output_ext['bucket'])
+			s += "\n"
+			s += go_style_dumps(tx_output_ext['key'])
+			s += "\n"
+			s += go_style_dumps(tx_output_ext['value'])
+			s += "\n"
+		if 'contract_requests' not in tx:
+			s += "null"  # contract request
+			s += "\n"
+		else:
+			s += go_style_dumps(tx['contract_requests'])
+			s += "\n"
 		s += go_style_dumps(tx['initiator'])
 		s += "\n"
 		s += go_style_dumps(tx['auth_require'])
@@ -87,6 +120,7 @@ class XuperSDK(object):
 
 	def sign_tx(self, tx):
 		raw = self.__encodeTx(tx, False)
+		#print(raw.decode())
 		s = self.private_key.sign(raw, hashfunc=double_sha256, sigencode=sigencode_der)
 		tx['auth_require_signs'][0]['Sign'] = base64.b64encode(s).decode()
 		tx['initiator_signs'][0]['Sign'] = base64.b64encode(s).decode()
@@ -106,20 +140,56 @@ class XuperSDK(object):
 		#print(self.private_key.privkey.public_key.point.x())
 		#print(self.private_key.privkey.public_key.point.y())
 
-	def post_tx(self, bcname, tx):
+	def post_tx(self, tx):
 		payload = {
-			'bcname':bcname,
-			'header':{'logid':'pysdk_'+str(int(time.time()*1e6)) },
+			'bcname':self.bcname,
+			'header':{'logid':'pysdk_post_tx'+str(int(time.time()*1e6)) },
 			'txid': tx['txid'],
 			'tx': tx
 		}	
-		print(json.dumps(payload))
+		#print(json.dumps(payload))
 		return requests.post(self.url + "/v1/post_tx", data = json.dumps(payload)).content
 
-
-	def transfer(self, bcname, to_address, amount, desc=''):
+	def preexec(self, contract, method, args, module="wasm"):
 		payload = {
-			'bcname':bcname,
+			'bcname':self.bcname,
+			'header':{'logid':'pysdk_preexec'+str(int(time.time())*1e6)},
+			'requests':[
+				{
+					'module_name': module,
+					'contract_name': contract,
+					'method_name':method,
+					'args':dict([(k,base64.b64encode(v).decode()) for k,v in args.items()]),
+				}
+			],
+			'initiator':self.address,
+			'auth_require':[self.address]
+		}
+		#print(json.dumps(payload))
+		return requests.post(self.url + "/v1/preexec", data = json.dumps(payload)).content
+
+	def invoke(self, contract, method, args, module="wasm"):
+		rsps = self.preexec(contract, method, args, module)
+		preexec_result = json.loads(rsps)
+		contract_info = {}
+		contract_info['tx_inputs_ext'] = preexec_result['response']['inputs']
+		contract_info['tx_outputs_ext'] = preexec_result['response']['outputs']
+		contract_info['contract_requests'] = preexec_result['response']['requests']
+		contract_requests = contract_info["contract_requests"]
+		for req in contract_requests:
+			for res_limit in req['resource_limits']:
+				if 'type' in res_limit:
+					res_limit['type'] = ResTypeEnum[res_limit['type']]
+				if 'limit' in res_limit:
+					res_limit['limit'] = int(res_limit['limit'])
+		return_msg = preexec_result['response']['response']
+		fee = preexec_result['response']['gas_used']
+		self.transfer('$', int(fee)+10, '', contract_info)
+		return [base64.b64decode(x) for x in return_msg], int(fee)
+
+	def transfer(self, to_address, amount, desc='', contract_info = None):
+		payload = {
+			'bcname':self.bcname,
 			'address': self.address,
 			'totalNeed': str(amount),
 			'header':{'logid':'pysdk_'+str(int(time.time()*1e6)) },
@@ -165,16 +235,22 @@ class XuperSDK(object):
 			'PublicKey':self.public_key_js,
 			'Sign':''
 		})
+		if contract_info != None:
+			tx.update(contract_info)
 		self.sign_tx(tx)
 		#print(json.dumps(tx))
-		res = self.post_tx(bcname, tx)
+		res = self.post_tx(tx)
 		print("txid:", binascii.hexlify(base64.b64decode(tx['txid'])).decode())
 		
 		
 
 if __name__ == "__main__":
-	pysdk = XuperSDK("http://localhost:8098")
+	pysdk = XuperSDK("http://localhost:8098", "xuper")
 	pysdk.readkeys("./data/keys")
 
-	pysdk.transfer("xuper", "bob", 88888, desc="hello world")
+	pysdk.transfer("bob", 88888, desc="hello world")
+	#resps = pysdk.preexec("counter", "increase", {"key":b"counter"})
+	#print(resps.decode())
+	rsps = pysdk.invoke("counter", "increase", {"key":b"counter"})
+	print("response & fee", rsps)
 
