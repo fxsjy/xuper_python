@@ -148,7 +148,11 @@ class XuperSDK(object):
 			'tx': tx
 		}	
 		#print(json.dumps(payload))
-		return requests.post(self.url + "/v1/post_tx", data = json.dumps(payload)).content
+		rsps = requests.post(self.url + "/v1/post_tx", data = json.dumps(payload))
+		rsps_obj = json.loads(rsps.content)
+		if 'error' in rsps_obj['header']:
+			raise Exception(rsps_obj['header'])
+		return rsps.content
 
 	def preexec(self, contract, method, args, module="wasm"):
 		payload = {
@@ -165,8 +169,11 @@ class XuperSDK(object):
 			'initiator':self.address,
 			'auth_require':[self.address]
 		}
-		#print(json.dumps(payload))
-		return requests.post(self.url + "/v1/preexec", data = json.dumps(payload)).content
+		rsps = requests.post(self.url + "/v1/preexec", data = json.dumps(payload))
+		rsps_obj = json.loads(rsps.content)
+		if 'error' in rsps_obj:
+			raise Exception(rsps_obj)
+		return rsps.content
 
 	def invoke(self, contract, method, args, module="wasm"):
 		rsps = self.preexec(contract, method, args, module)
@@ -197,6 +204,8 @@ class XuperSDK(object):
 		}	
 		select_response = requests.post(self.url + "/v1/select_utxos_v2", data = json.dumps(payload))
 		selected_obj = json.loads(select_response.content)	
+		if 'error' in selected_obj['header']:
+			raise Exception(selected_obj['header'])
 		tx = json.loads(TxTemplate)
 		#pprint(selected_obj)
 		tx['tx_inputs'] = selected_obj['utxoList']
@@ -249,8 +258,8 @@ if __name__ == "__main__":
 	pysdk.readkeys("./data/keys")
 
 	pysdk.transfer("bob", 88888, desc="hello world")
-	#resps = pysdk.preexec("counter", "increase", {"key":b"counter"})
-	#print(resps.decode())
+	resps = pysdk.preexec("counter", "get", {"key":b"counter"})
+	print(resps.decode())
 	rsps = pysdk.invoke("counter", "increase", {"key":b"counter"})
 	print("response & fee", rsps)
 
