@@ -1,5 +1,6 @@
 import xuper
 import time
+import random
 
 pysdk = xuper.XuperSDK("http://localhost:8098", "xuper")
 pysdk.readkeys("./data/keys")
@@ -25,6 +26,6 @@ time.sleep(3)
 #5. deploy contract
 pysdk.transfer(new_account_name, 10000000, desc="start funds")
 pysdk.set_account(new_account_name)
-rsps = pysdk.deploy(new_account_name, 'counter100', open('/tmp/counter.wasm','rb').read(), {'creator':b'sjy'})
+rsps = pysdk.deploy(new_account_name, 'counter'+str(random.randint(100,1000000)), open('./data/wasm/counter.wasm','rb').read(), {'creator':b'sjy'})
 print(rsps)
 

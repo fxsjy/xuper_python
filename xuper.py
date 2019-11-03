@@ -195,6 +195,10 @@ class XuperSDK(object):
 	def invoke(self, contract, method, args, module="wasm"):
 		rsps = self.preexec(contract, method, args, module)
 		preexec_result = json.loads(rsps)
+		return_msg = preexec_result['response']['response']
+		fee = preexec_result['response']['gas_used']
+		if 'outputs' not in preexec_result['response']:
+			return [base64.b64decode(x) for x in return_msg], int(fee)
 		contract_info = {}
 		contract_info['tx_inputs_ext'] = preexec_result['response']['inputs']
 		contract_info['tx_outputs_ext'] = preexec_result['response']['outputs']
@@ -206,8 +210,6 @@ class XuperSDK(object):
 					res_limit['type'] = ResTypeEnum[res_limit['type']]
 				if 'limit' in res_limit:
 					res_limit['limit'] = int(res_limit['limit'])
-		return_msg = preexec_result['response']['response']
-		fee = preexec_result['response']['gas_used']
 		self.transfer('$', int(fee)+10, '', contract_info)
 		return [base64.b64decode(x) for x in return_msg], int(fee)
 
