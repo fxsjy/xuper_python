@@ -2,6 +2,7 @@
 #!/bin/env python
 import time
 import json
+import random
 import requests
 import ecdsa
 from ecdsa.util import sigencode_der, sigdecode_der
@@ -9,6 +10,7 @@ import base64
 import hashlib
 import binascii
 from pprint import pprint
+from collections import OrderedDict
 from ecdsa import ellipticcurve, NIST256p, SigningKey, VerifyingKey
 
 TxTemplate = '''
@@ -53,6 +55,8 @@ class XuperSDK(object):
 	def __init__(self, url, bcname):
 		self.url = url
 		self.bcname = bcname
+		self.address = ""
+		self.account_name = ""
 
 	def __encodeTx(self, tx, include_sign = False):
 		s = ""
@@ -83,8 +87,9 @@ class XuperSDK(object):
 			s += "\n"
 			s += go_style_dumps(tx_input_ext['key'])
 			s += "\n"
-			s += go_style_dumps(tx_input_ext['ref_txid'])
-			s += "\n"
+			if 'ref_txid' in tx_input_ext:
+				s += go_style_dumps(tx_input_ext['ref_txid'])
+				s += "\n"
 			s += go_style_dumps(tx_input_ext.get('ref_offset',0))
 			s += "\n"
 		for tx_output_ext in tx['tx_outputs_ext']:
@@ -118,6 +123,18 @@ class XuperSDK(object):
 		#print(json_multi.decode())
 		return double_sha256(json_multi)
 
+	def __my_address(self):
+		if self.account_name != "":
+			return self.account_name
+		else:
+			return self.address
+
+	def __my_auth_require(self):
+		if self.account_name != "":
+			return self.account_name + "/" + self.address
+		else:
+			return self.address
+	
 	def sign_tx(self, tx):
 		raw = self.__encodeTx(tx, False)
 		#print(raw.decode())
@@ -163,11 +180,11 @@ class XuperSDK(object):
 					'module_name': module,
 					'contract_name': contract,
 					'method_name':method,
-					'args':dict([(k,base64.b64encode(v).decode()) for k,v in args.items()]),
+					'args':OrderedDict([(k,base64.b64encode(args[k]).decode()) for k in sorted(args.keys())]),
 				}
 			],
-			'initiator':self.address,
-			'auth_require':[self.address]
+			'initiator':self.__my_address(),
+			'auth_require':[self.__my_auth_require()]
 		}
 		rsps = requests.post(self.url + "/v1/preexec", data = json.dumps(payload))
 		rsps_obj = json.loads(rsps.content)
@@ -194,10 +211,46 @@ class XuperSDK(object):
 		self.transfer('$', int(fee)+10, '', contract_info)
 		return [base64.b64decode(x) for x in return_msg], int(fee)
 
+	def new_account(self, account_name=None, acl=None):
+		if account_name == None:
+			account_name = str(random.randint(0,9999999999999999)).zfill(16)
+		if acl == None:
+			acl = {
+			    "pm": {
+				"rule": 1,
+				"acceptValue": 1.0
+			    },
+			    "aksWeight": {
+				self.address: 1.0
+			    }
+			}
+		self.invoke('','NewAccount', {'account_name':account_name.encode(), 'acl':json.dumps(acl).encode()},'xkernel')
+		return "XC"+account_name+"@"+self.bcname
+
+	def set_account(self, account_name):
+		self.account_name = account_name
+
+	def deploy(self, account_name, contract_name, code, init_args, runtime="c"):
+		runtime_desc = {
+			"c":b"\n\x01c",
+			"go":b"TODO"
+		}
+		js_init_args = go_style_dumps(
+			OrderedDict([(k,base64.b64encode(init_args[k]).decode()) for k in sorted(init_args.keys())])
+		)
+		args = {
+			'account_name': account_name.encode(),
+			'contract_name': contract_name.encode(),
+			'contract_code': code,
+			'contract_desc': runtime_desc[runtime],
+			'init_args':js_init_args.encode()
+		}		
+		return self.invoke('','Deploy', args, 'xkernel')
+
 	def transfer(self, to_address, amount, desc='', contract_info = None):
 		payload = {
 			'bcname':self.bcname,
-			'address': self.address,
+			'address': self.__my_address(),
 			'totalNeed': str(amount),
 			'header':{'logid':'pysdk_'+str(int(time.time()*1e6)) },
 			'needLock': False
@@ -212,7 +265,7 @@ class XuperSDK(object):
 		for x in tx['tx_inputs']:
 			x['ref_txid'] = x['refTxid']
 			x['ref_offset'] = x.get('refOffset', 0)
-			x['from_addr'] = base64.b64encode(self.address.encode()).decode()
+			x['from_addr'] = base64.b64encode(self.__my_address().encode()).decode()
 			del x['refTxid']
 			del x['toAddr']
 			if 'refOffset' in x:
@@ -225,17 +278,18 @@ class XuperSDK(object):
 				'to_addr': base64.b64encode(to_address.encode('ascii')).decode()
 			}
 		)
-		tx['tx_outputs'].append(
-			{
-				'amount':base64.b64encode(output_return.to_bytes(byteorder='big',length=32).lstrip(b'\0')).decode(),
-				'to_addr': base64.b64encode(self.address.encode()).decode()
-			}
-		)
+		if output_return > 0:
+			tx['tx_outputs'].append(
+				{
+					'amount':base64.b64encode(output_return.to_bytes(byteorder='big',length=32).lstrip(b'\0')).decode(),
+					'to_addr': base64.b64encode(self.__my_address().encode()).decode()
+				}
+			)
 		tx['desc'] = base64.b64encode(desc.encode()).decode()
 		tx['nonce'] = str(int(time.time()*1e6)) 
 		tx['timestamp'] = int(time.time()*1e6)
-		tx['initiator'] = self.address
-		tx['auth_require'].append(self.address)
+		tx['initiator'] = self.__my_address()
+		tx['auth_require'].append(self.__my_auth_require())
 		tx['initiator_signs'].append({
 			'PublicKey':self.public_key_js,
 			'Sign':''
@@ -258,8 +312,17 @@ if __name__ == "__main__":
 	pysdk.readkeys("./data/keys")
 
 	pysdk.transfer("bob", 88888, desc="hello world")
-	resps = pysdk.preexec("counter", "get", {"key":b"counter"})
-	print(resps.decode())
+	rsps = pysdk.preexec("counter", "get", {"key":b"counter"})
+	print(rsps.decode())
 	rsps = pysdk.invoke("counter", "increase", {"key":b"counter"})
-	print("response & fee", rsps)
+	print(rsps)
+	###### test deploy contract
+	new_account_name = pysdk.new_account()
+	print("wait acl confirmed....")
+	time.sleep(3)
+	pysdk.transfer(new_account_name, 10000000, desc="start funds")
+	pysdk.set_account(new_account_name)
+	rsps = pysdk.deploy(new_account_name, 'counter100', open('/tmp/counter.wasm','rb').read(), {'creator':b'sjy'})
+	print(rsps)
+	
 
