@@ -9,7 +9,7 @@ pysdk.readkeys("./data/keys")
 account_name = "XC1111111111111111@xuper"
 pysdk.transfer(account_name, 10000000, desc="start funds")
 pysdk.set_account(account_name)
-rsps = pysdk.deploy(account_name, 'simplefs2', open('./data/wasm/simplefs.wasm','rb').read(), {})
+rsps = pysdk.deploy(account_name, 'simplefs8', open('./data/wasm/simplefs.wasm','rb').read(), {})
 print(rsps)
 
 
