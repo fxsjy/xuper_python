@@ -8,6 +8,7 @@ import pickle
 import time
 import json
 from fuse import Fuse
+import codecs
 
 class MyStat(fuse.Stat):
     def __init__(self):
@@ -29,7 +30,39 @@ class Xfs(object):
         self.pysdk.readkeys("./data/keys")
         self.contract = "simplefs8"
 
+    def read_oldversion(self, path):
+        real_path, prev_num = path.split("@")
+        prev_num = int(prev_num)
+        rsps = self.pysdk.preexec(self.contract, "get", {"key":real_path.encode()}) 
+        rsps_obj = json.loads(rsps)
+        if 'error' in rsps_obj:
+            raise Exception(rsps_obj)
+        obj = None
+        tx_inputs_ext = rsps_obj['response']['inputs']
+        for i in range(prev_num):
+            obj = None
+            txid = None
+            for ti in tx_inputs_ext:
+                if codecs.decode(ti['key'].encode(),'base64').decode() == real_path:
+                    txid = ti.get('ref_txid',None)
+                    break
+            if txid == None:
+                return None
+            tx = self.pysdk.query_tx(codecs.encode(codecs.decode(txid.encode(),'base64'), 'hex').decode())
+            tx_inputs_ext = tx['tx_inputs_ext']
+            for to in tx['tx_outputs_ext']:
+                if codecs.decode(to['key'].encode(),'base64').decode() == real_path:
+                    obj = to['value']
+                    break
+        if obj == None:
+            return None
+        pobj = pickle.loads(codecs.decode(obj.encode(), 'base64'))
+        return pobj
+
     def readobj(self, path):
+        if path.find("@") != -1:
+            obj = self.read_oldversion(path) 
+            return obj
         rsps = self.pysdk.invoke(self.contract, "get", {"key":path.encode()} )
         buf = rsps[0][0]
         if buf == b'':
@@ -48,6 +81,8 @@ class Xfs(object):
         return  buf[offset:offset+size]
 
     def write(self, path, offset, data):
+        if path.find('@') != -1:
+            return Exception("invalid file name:" + path)
         obj = self.readobj(path)
         buf = obj.content
         size = len(data)
@@ -126,7 +161,7 @@ class HelloFS(Fuse):
     def readdir(self, path, offset):
         print("readdir", path, offset)
         children = xfs.list(path)
-        print(children)
+        #print(children)
         for r in  '.', '..':
             yield fuse.Direntry(r)
         for r in children:
