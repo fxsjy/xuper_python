@@ -25,10 +25,10 @@ class MyStat(fuse.Stat):
         self.content = b''
 
 class Xfs(object):
-    def __init__(self, xgw="http://localhost:8098", chain="xuper"):
+    def __init__(self, xgw="http://localhost:8098", chain="xuper", contract="simplefs10"):
         self.pysdk = xuper.XuperSDK(xgw, chain)
         self.pysdk.readkeys("./data/keys")
-        self.contract = "simplefs8"
+        self.contract = contract
 
     def read_oldversion(self, path):
         real_path, prev_num = path.split("@")
@@ -82,7 +82,7 @@ class Xfs(object):
 
     def write(self, path, offset, data):
         if path.find('@') != -1:
-            return Exception("invalid file name:" + path)
+            raise Exception("invalid file name:" + path)
         obj = self.readobj(path)
         buf = obj.content
         size = len(data)
@@ -204,6 +204,14 @@ class HelloFS(Fuse):
         xfs.mkdir(path)
         return 0
 
+    def rename(self, oldpath, newpath):
+        print("rename", oldpath, newpath)
+        data = xfs.readall(oldpath)
+        xfs.truncate(newpath,0)
+        xfs.write(newpath, 0, data)
+        xfs.remove(oldpath)
+        return 0
+        
 
 def main():
     usage="""

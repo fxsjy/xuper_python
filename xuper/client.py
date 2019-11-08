@@ -11,7 +11,7 @@ import hashlib
 import binascii
 import codecs
 from pprint import pprint
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from ecdsa import ellipticcurve, NIST256p, SigningKey, VerifyingKey
 
 TxTemplate = '''
@@ -45,6 +45,8 @@ ResTypeEnum = {
     "XFEE":3
 }
 
+InvokeResponse = namedtuple('InvokeResponse', ['result', 'fee', 'txid'])
+
 def double_sha256(data):
     s1 = hashlib.sha256(data).digest()
     return hashlib.sha256(s1)
@@ -52,6 +54,11 @@ def double_sha256(data):
 def go_style_dumps(data):
     return json.dumps(data,separators=(',',':'),sort_keys=False)
     
+def to_bytes(n, length=32, endianess='big'):
+    h = b'%x' % n
+    s = codecs.decode((b'0'*(len(h) % 2) + h).zfill(length*2), 'hex')
+    return s if endianess == 'big' else s[::-1]
+
 class XuperSDK(object):
     def __init__(self, url, bcname):
         self.url = url
@@ -177,17 +184,17 @@ class XuperSDK(object):
             'bcname':self.bcname,
             'header':{'logid':'pysdk_preexec'+str(int(time.time())*1e6)},
             'requests':[
-                {
-                    'module_name': module,
-                    'contract_name': contract,
-                    'method_name':method,
-                    'args':OrderedDict([(k,base64.b64encode(args[k]).decode()) for k in sorted(args.keys())]),
-                }
+                OrderedDict([
+                    ('module_name', module),
+                    ('contract_name', contract),
+                    ('method_name', method),
+                    ('args',OrderedDict([(k,base64.b64encode(args[k]).decode()) for k in sorted(args.keys())])),
+                ])
             ],
             'initiator':self.__my_address(),
             'auth_require':[self.__my_auth_require()]
         }
-        rsps = requests.post(self.url + "/v1/preexec", data = json.dumps(payload))
+        rsps = requests.post(self.url + "/v1/preexec", data = json.dumps(payload, sort_keys=False))
         rsps_obj = json.loads(rsps.content)
         if 'error' in rsps_obj:
             raise Exception(rsps_obj)
@@ -208,7 +215,7 @@ class XuperSDK(object):
         
     def invoke(self, contract, method, args, module="wasm"):
         rsps = self.preexec(contract, method, args, module)
-        preexec_result = json.loads(rsps)
+        preexec_result = json.loads(rsps,object_pairs_hook=OrderedDict)
         return_msg = preexec_result['response']['response']
         fee = preexec_result['response']['gas_used']
         if 'outputs' not in preexec_result['response']:
@@ -225,7 +232,7 @@ class XuperSDK(object):
                 if 'limit' in res_limit:
                     res_limit['limit'] = int(res_limit['limit'])
         txid = self.transfer('$', int(fee)+10, '', contract_info)
-        return [base64.b64decode(x) for x in return_msg], int(fee), txid
+        return InvokeResponse([base64.b64decode(x) for x in return_msg], int(fee), txid)
 
     def new_account(self, account_name=None, acl=None):
         if account_name == None:
@@ -263,6 +270,17 @@ class XuperSDK(object):
         }       
         return self.invoke('','Deploy', args, 'xkernel')
 
+    def balance(self, address = None):
+        if address == None:
+            address = self.address
+        payload = {
+            'bcs':[{'bcname':self.bcname}],
+            'address': address
+        }
+        balance_response = requests.post(self.url + "/v1/get_balance", data = json.dumps(payload))
+        balance = json.loads(balance_response.content)
+        return balance['bcs'][0]['balance']
+
     def transfer(self, to_address, amount, desc='', contract_info = None):
         payload = {
             'bcname':self.bcname,
@@ -290,14 +308,14 @@ class XuperSDK(object):
         output_return = total_selected - amount
         tx['tx_outputs'].append(
             {
-                'amount':base64.b64encode(amount.to_bytes(byteorder='big',length=32).lstrip(b'\0')).decode(),
+                'amount':base64.b64encode(to_bytes(amount).lstrip(b'\0')).decode(),
                 'to_addr': base64.b64encode(to_address.encode('ascii')).decode()
             }
         )
         if output_return > 0:
             tx['tx_outputs'].append(
                 {
-                    'amount':base64.b64encode(output_return.to_bytes(byteorder='big',length=32).lstrip(b'\0')).decode(),
+                    'amount':base64.b64encode(to_bytes(output_return).lstrip(b'\0')).decode(),
                     'to_addr': base64.b64encode(self.__my_address().encode()).decode()
                 }
             )
@@ -320,26 +338,4 @@ class XuperSDK(object):
         #print(json.dumps(tx))
         res = self.post_tx(tx)
         return codecs.encode(codecs.decode(tx['txid'].encode(),'base64'), 'hex').decode()
-
-if __name__ == "__main__":
-    pysdk = XuperSDK("http://localhost:8098", "xuper")
-    pysdk.readkeys("./data/keys")
-
-    txid = pysdk.transfer("bob", 88888, desc="hello world")
-    print("txid", txid)
-    tx = pysdk.query_tx(txid)
-    print(tx)
-    rsps = pysdk.preexec("counter", "get", {"key":b"counter"})
-    print(rsps.decode())
-    rsps = pysdk.invoke("counter", "increase", {"key":b"counter"})
-    print(rsps)
-    ###### test deploy contract
-    new_account_name = pysdk.new_account()
-    print("wait acl confirmed....")
-    time.sleep(3)
-    pysdk.transfer(new_account_name, 10000000, desc="start funds")
-    pysdk.set_account(new_account_name)
-    rsps = pysdk.deploy(new_account_name, 'counter100', open('/tmp/counter.wasm','rb').read(), {'creator':b'sjy'})
-    print(rsps)
-    
 
